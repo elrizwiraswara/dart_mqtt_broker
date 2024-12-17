@@ -7,6 +7,7 @@ class MqttBroker {
 
   late ServerSocket? _serverSocket;
   final Map<String, List<Socket>> _topicSubscribers = {};
+  void Function(String topic, int qos, Uint8List payload)? _onMessagePublished;
 
   MqttBroker({
     required this.address,
@@ -16,10 +17,10 @@ class MqttBroker {
   Future<void> start() async {
     try {
       _serverSocket = await ServerSocket.bind(address, port);
-      print('MQTT Broker started on ${_serverSocket!.address} port $port');
+      print('[MqttBroker] MQTT Broker started on ${_serverSocket!.address} port $port');
       _serverSocket!.listen(_handleClient);
     } catch (e) {
-      print('Failed to start MQTT Broker: $e');
+      print('[MqttBroker] Failed to start MQTT Broker: $e');
     }
   }
 
@@ -28,24 +29,29 @@ class MqttBroker {
       _serverSocket?.close();
       _serverSocket = null;
       _topicSubscribers.clear();
-      print('MQTT Broker stopped');
+      print('[MqttBroker] MQTT Broker stopped');
     } catch (e) {
-      print('Failed to stop MQTT Broker: $e');
+      print('[MqttBroker] Failed to stop MQTT Broker: $e');
     }
   }
 
+  void onMessagePublishedListener(Function(String topic, int qos, Uint8List payload) listener) {
+    _onMessagePublished = listener;
+    print('[MqttBroker] Listener for published messages set.');
+  }
+
   void _handleClient(Socket client) {
-    print('Client connected: ${client.remoteAddress.address}:${client.remotePort}');
+    print('[MqttBroker] Client connected: ${client.remoteAddress.address}:${client.remotePort}');
     client.listen(
       (Uint8List data) => _processPacket(client, data),
-      onError: (error) => print('Error from client: $error'),
+      onError: (error) => print('[MqttBroker] Error from client: $error'),
       onDone: () => _clientDisconnected(client),
     );
   }
 
   void _processPacket(Socket client, Uint8List data) {
     if (data.isEmpty) {
-      print('Received empty packet, ignoring.');
+      print('[MqttBroker] Received empty packet, ignoring.');
       return;
     }
 
@@ -55,46 +61,46 @@ class MqttBroker {
     // Parse Remaining Length
     final remainingLengthResult = _parseRemainingLength(data, 1);
     if (remainingLengthResult == null) {
-      print('Invalid remaining length field, ignoring packet.');
+      print('[MqttBroker] Invalid remaining length field, ignoring packet.');
       return;
     }
     final remainingLength = remainingLengthResult['length'] ?? 0;
     final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
 
     if (data.length < variableHeaderIndex + remainingLength) {
-      print('Incomplete packet, ignoring.');
+      print('[MqttBroker] Incomplete packet, ignoring.');
       return;
     }
 
     // Process Packet by Type
     switch (packetType) {
       case '10': // CONNECT
-        print('CONNECT received');
+        print('[MqttBroker] CONNECT received');
         client.add(_buildConnAckPacket());
         break;
 
       case '82': // SUBSCRIBE
-        print('SUBSCRIBE received');
+        print('[MqttBroker] SUBSCRIBE received');
         _handleSubscribe(client, data, variableHeaderIndex, remainingLength);
         break;
 
       case '30': // PUBLISH
-        print('PUBLISH received');
+        print('[MqttBroker] PUBLISH received');
         _handlePublish(client, data, variableHeaderIndex, remainingLength);
         break;
 
       case 'c0': // PINGREQ (Handled by client)
-        print('PINGREQ received');
+        print('[MqttBroker] PINGREQ received');
         client.add(Uint8List.fromList([0xD0, 0x00]));
         break;
 
       case 'e0': // DISCONNECT (Handled by client)
-        print('DISCONNECT received');
+        print('[MqttBroker] DISCONNECT received');
         _clientDisconnected(client);
         break;
 
       default:
-        print('Unknown packet type: $packetType');
+        print('[MqttBroker] Unknown packet type: $packetType');
     }
   }
 
@@ -123,39 +129,73 @@ class MqttBroker {
   }
 
   void _handlePublish(Socket client, Uint8List data, int variableHeaderIndex, int remainingLength) {
+    // Extract Fixed Header Flags
+    final fixedHeader = data[0];
+    final qos = (fixedHeader >> 1) & 0x03; // QoS level (2 bits)
+    final retain = (fixedHeader & 0x01) == 1; // Retain flag
+
     // Extract Topic Name
     final topicLength = (data[variableHeaderIndex] << 8) + data[variableHeaderIndex + 1];
     final topicStart = variableHeaderIndex + 2;
     final topicEnd = topicStart + topicLength;
 
     if (topicEnd > data.length) {
-      print('Invalid topic length in PUBLISH packet.');
+      print('[MqttBroker] Invalid topic length in PUBLISH packet.');
       return;
     }
     final topic = String.fromCharCodes(data.sublist(topicStart, topicEnd));
 
-    // Extract Payload
-    final payloadStart = topicEnd;
+    // QoS-specific Handling: Extract Packet Identifier for QoS 1 or 2
+    int payloadStart = topicEnd;
+    int? packetIdentifier;
+    if (qos > 0) {
+      if (payloadStart + 2 > data.length) {
+        print('[MqttBroker] Invalid packet identifier length in PUBLISH packet.');
+        return;
+      }
+      packetIdentifier = (data[payloadStart] << 8) + data[payloadStart + 1];
+      payloadStart += 2;
+      print('[MqttBroker] PUBLISH packet with QoS $qos, Packet Identifier: $packetIdentifier');
+    }
+
     final payloadEnd = variableHeaderIndex + remainingLength;
     if (payloadEnd > data.length) {
-      print('Invalid payload length in PUBLISH packet.');
+      print('[MqttBroker] Invalid payload length in PUBLISH packet.');
       return;
     }
-    final payload = String.fromCharCodes(data.sublist(payloadStart, payloadEnd));
 
-    print('Received PUBLISH: Topic = "$topic", Payload = "$payload"');
-    _publishMessage(topic, payload);
+    final payload = data.sublist(payloadStart, payloadEnd);
+
+    print('[MqttBroker] Received PUBLISH: Topic = "$topic", Payload (bytes) = $payload, QoS = $qos, Retain = $retain');
+
+    publishMessage(topic, qos, payload);
+
+    // Acknowledge if QoS 1
+    if (qos == 1 && packetIdentifier != null) {
+      client.add(_buildPubAckPacket(packetIdentifier));
+    }
+
+    // For QoS 2, additional handling (PUBREC, PUBREL, PUBCOMP) would be needed.
+  }
+
+  Uint8List _buildPubAckPacket(int packetIdentifier) {
+    return Uint8List.fromList([
+      0x40, // PUBACK packet type and flags
+      0x02, // Remaining length
+      (packetIdentifier >> 8) & 0xFF, // Packet Identifier MSB
+      packetIdentifier & 0xFF, // Packet Identifier LSB
+    ]);
   }
 
   void _handleSubscribe(Socket client, Uint8List data, int variableHeaderIndex, int remainingLength) {
     int index = variableHeaderIndex;
     final packetIdentifier = (data[index] << 8) + data[index + 1]; // 2 bytes for Packet Identifier
     index += 2;
-    print('Packet Identifier: $packetIdentifier');
+    print('[MqttBroker] Packet Identifier: $packetIdentifier');
 
     // Check if the remaining length makes sense for the topics in the packet
     int expectedLength = remainingLength - 2; // excluding Packet Identifier
-    print('Expected remaining length for topics: $expectedLength');
+    print('[MqttBroker] Expected remaining length for topics: $expectedLength');
 
     while (index < data.length && expectedLength > 0) {
       // Extract Topic Length (2 bytes)
@@ -164,7 +204,7 @@ class MqttBroker {
 
       // Sanity check for topic length
       if (topicLength <= 0 || topicLength + index > data.length) {
-        print('Invalid topic length, ignoring packet.');
+        print('[MqttBroker] Invalid topic length, ignoring packet.');
         return;
       }
 
@@ -175,7 +215,7 @@ class MqttBroker {
       final qos = data[index];
       index++;
 
-      print('Subscribed to topic: "$topic" with QoS: $qos');
+      print('[MqttBroker] Subscribed to topic: "$topic" with QoS: $qos');
 
       // Subscribe client to the topic
       _subscribeToTopic(client, topic);
@@ -201,8 +241,8 @@ class MqttBroker {
       _topicSubscribers[topic] = [];
     }
     _topicSubscribers[topic]!.add(client);
-    print('[_subscribeToTopic] Client subscribed to topic: $topic length ${_topicSubscribers.length}');
-    print('[_subscribeToTopic] Client subscriber: ${_topicSubscribers.toString()}');
+    print('[MqttBroker] Client subscribed to topic: $topic length ${_topicSubscribers.length}');
+    print('[MqttBroker] Client subscriber: ${_topicSubscribers.toString()}');
 
     // Send SUBACK packet (optional, depending on MQTT version)
     client.add(_buildSubAckPacket());
@@ -212,41 +252,47 @@ class MqttBroker {
     return Uint8List.fromList([0x90, 0x02, 0x00, 0x00]); // Example SUBACK packet
   }
 
-  void _publishMessage(String topic, String message) {
-    print('[_publishMessage] Client subscriber: ${_topicSubscribers.toString()}');
-    print('[_publishMessage] is contains subscribe key $topic: ${_topicSubscribers.containsKey(topic)}');
+  void publishMessage(String topic, int qos, Uint8List payload) {
     if (_topicSubscribers.containsKey(topic)) {
       final subscribers = _topicSubscribers[topic]!;
       for (final client in subscribers) {
-        final publishPacket = _buildPublishPacket(topic, message);
+        final publishPacket = _buildPublishPacket(topic, qos, payload);
         client.add(publishPacket);
-        print('Message sent to client: Topic = $topic, Message = $message');
+        print('[MqttBroker] Message sent to client: Topic = $topic, Payload = $payload');
       }
     } else {
-      print('No subscribers for topic: $topic');
+      print('[MqttBroker] No subscribers for topic: $topic');
+    }
+
+    // Notify the listener
+    if (_onMessagePublished != null) {
+      print('[MqttBroker] Message publised listener added');
+      _onMessagePublished!(topic, qos, payload);
     }
   }
 
-  Uint8List _buildPublishPacket(String topic, String message) {
-    final topicBytes = topic.codeUnits;
-    final messageBytes = message.codeUnits;
+  Uint8List _buildPublishPacket(String topic, int qos, Uint8List payload) {
+    // Fixed Header
+    final fixedHeader = 0x30 | (qos << 1); // PUBLISH packet with QoS bits
 
-    // Fixed header
-    final header = [0x30]; // PUBLISH with QoS 0
+    // Variable Header: Topic Name
+    final topicBytes = Uint8List.fromList(topic.codeUnits);
+    final topicLength = Uint8List(2);
+    topicLength[0] = (topicBytes.length >> 8) & 0xFF;
+    topicLength[1] = topicBytes.length & 0xFF;
 
-    // Remaining length
-    final remainingLength = topicBytes.length + 2 + messageBytes.length;
+    // Remaining Length: Topic Length + Payload Length
+    final remainingLength = topicBytes.length + 2 + payload.length;
     final remainingLengthBytes = _encodeRemainingLength(remainingLength);
 
-    // Variable header + payload
-    final payload = [
-      (topicBytes.length >> 8) & 0xFF,
-      topicBytes.length & 0xFF,
+    // Combine all parts
+    return Uint8List.fromList([
+      fixedHeader,
+      ...remainingLengthBytes,
+      ...topicLength,
       ...topicBytes,
-      ...messageBytes,
-    ];
-
-    return Uint8List.fromList([...header, ...remainingLengthBytes, ...payload]);
+      ...payload,
+    ]);
   }
 
   List<int> _encodeRemainingLength(int length) {
@@ -263,7 +309,7 @@ class MqttBroker {
   }
 
   void _clientDisconnected(Socket client) {
-    print('Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
+    print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
     _topicSubscribers.forEach((topic, clients) {
       client.close();
       clients.remove(client);
