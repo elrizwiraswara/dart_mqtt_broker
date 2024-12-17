@@ -321,13 +321,10 @@ class MqttBroker {
     return result;
   }
 
-  void _handleDisconnect(Socket client) {
+  void _handleDisconnect(Socket client) async {
     print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
-    _topicSubscribers.forEach((topic, clients) async {
-      await client.flush();
-      await client.close();
-      clients.remove(client);
-    });
+    await client.flush();
+    await client.close();
   }
 
   Uint8List _buildConnAckPacket() {
