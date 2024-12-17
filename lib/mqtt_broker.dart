@@ -132,22 +132,22 @@ class MqttBroker {
   }
 
   void _handleConnect(Socket client) {
-    final clientAddress = client.remoteAddress.address;
-
-    List<String> connectedClientAdresses = [];
-
-    _topicSubscribers.forEach((topic, clients) async {
-      connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
-    });
-
-    if (connectedClientAdresses.contains(clientAddress)) {
-      print('[MqttBroker] CONNECT ignored: Client $clientAddress is already connected.');
-      return;
-    }
-
-    print('[MqttBroker] CONNECT received from $clientAddress');
-
     try {
+      final clientAddress = client.remoteAddress.address;
+
+      List<String> connectedClientAdresses = [];
+
+      _topicSubscribers.forEach((topic, clients) async {
+        connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
+      });
+
+      if (connectedClientAdresses.contains(clientAddress)) {
+        print('[MqttBroker] CONNECT ignored: Client $clientAddress is already connected.');
+        return;
+      }
+
+      print('[MqttBroker] CONNECT received from $clientAddress');
+
       client.add(_buildConnAckPacket());
     } catch (e) {
       print('[MqttBroker] Error while writing to client: $e');
