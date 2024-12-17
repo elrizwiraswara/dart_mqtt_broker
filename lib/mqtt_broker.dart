@@ -67,10 +67,10 @@ class MqttBroker {
     final remainingLength = remainingLengthResult['length'] ?? 0;
     final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
 
-    if (data.length < variableHeaderIndex + remainingLength) {
-      print('[MqttBroker] Incomplete packet, ignoring.');
-      return;
-    }
+    // if (data.length < variableHeaderIndex + remainingLength) {
+    //   print('[MqttBroker] Incomplete packet, ignoring.');
+    //   return;
+    // }
 
     // Process Packet by Type
     switch (packetType) {
