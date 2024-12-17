@@ -246,6 +246,12 @@ class MqttBroker {
 
     // Send SUBACK packet (optional, depending on MQTT version)
     client.add(_buildSubAckPacket());
+
+    // Notify the listener
+    if (_onMessagePublished != null) {
+      print('[MqttBroker] Message publised listener added');
+      _onMessagePublished!(topic, 0, Uint8List.fromList([0]));
+    }
   }
 
   Uint8List _buildSubAckPacket() {
