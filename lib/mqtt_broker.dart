@@ -46,63 +46,68 @@ class MqttBroker {
       cancelOnError: true,
       (Uint8List data) => _processPacket(client, data),
       onError: (error) => print('[MqttBroker] Error from client: $error'),
-      onDone: () => _handleDisconnect(client),
+      onDone: () => print('[MqttBroker] Client disconnected'),
     );
   }
 
   void _processPacket(Socket client, Uint8List data) {
-    if (data.isEmpty) {
-      print('[MqttBroker] Received empty packet, ignoring.');
-      return;
-    }
+    try {
+      if (data.isEmpty) {
+        print('[MqttBroker] Received empty packet, ignoring.');
+        return;
+      }
 
-    // Fixed Header
-    final packetType = data[0].toRadixString(16);
+      // Fixed Header
+      final packetType = data[0].toRadixString(16);
 
-    // Parse Remaining Length
-    final remainingLengthResult = _parseRemainingLength(data, 1);
-    if (remainingLengthResult == null) {
-      print('[MqttBroker] Invalid remaining length field, ignoring packet.');
-      return;
-    }
-    final remainingLength = remainingLengthResult['length'] ?? 0;
-    final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
+      // Parse Remaining Length
+      final remainingLengthResult = _parseRemainingLength(data, 1);
+      if (remainingLengthResult == null) {
+        print('[MqttBroker] Invalid remaining length field, ignoring packet.');
+        return;
+      }
+      final remainingLength = remainingLengthResult['length'] ?? 0;
+      final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
 
-    if (data.length < variableHeaderIndex + remainingLength) {
-      print(
-          '[MqttBroker] Incomplete packet: Expected length = ${variableHeaderIndex + remainingLength}, Actual length = ${data.length}');
-      return;
-    }
+      if (data.length < variableHeaderIndex + remainingLength) {
+        print(
+            '[MqttBroker] Incomplete packet: Expected length = ${variableHeaderIndex + remainingLength}, Actual length = ${data.length}');
+        return;
+      }
 
-    // Process Packet by Type
-    switch (packetType) {
-      case '10': // CONNECT
-        print('[MqttBroker] CONNECT received');
-        _handleConnect(client);
-        break;
+      // Process Packet by Type
+      switch (packetType) {
+        case '10': // CONNECT
+          print('[MqttBroker] CONNECT received');
+          _handleConnect(client);
+          break;
 
-      case '82': // SUBSCRIBE
-        print('[MqttBroker] SUBSCRIBE received');
-        _handleSubscribe(client, data, variableHeaderIndex, remainingLength);
-        break;
+        case '82': // SUBSCRIBE
+          print('[MqttBroker] SUBSCRIBE received');
+          _handleSubscribe(client, data, variableHeaderIndex, remainingLength);
+          break;
 
-      case '30': // PUBLISH
-        print('[MqttBroker] PUBLISH received');
-        _handlePublish(client, data, variableHeaderIndex, remainingLength);
-        break;
+        case '30': // PUBLISH
+          print('[MqttBroker] PUBLISH received');
+          _handlePublish(client, data, variableHeaderIndex, remainingLength);
+          break;
 
-      case 'c0': // PINGREQ (Handled by client)
-        print('[MqttBroker] PINGREQ received');
-        _handlerPingReq(client);
-        break;
+        case 'c0': // PINGREQ (Handled by client)
+          print('[MqttBroker] PINGREQ received');
+          _handlerPingReq(client);
+          break;
 
-      case 'e0': // DISCONNECT (Handled by client)
-        print('[MqttBroker] DISCONNECT received');
-        _handleDisconnect(client);
-        break;
+        case 'e0': // DISCONNECT (Handled by client)
+          print('[MqttBroker] DISCONNECT received');
+          _handleDisconnect(client);
+          break;
 
-      default:
-        print('[MqttBroker] Unknown packet type: $packetType');
+        default:
+          print('[MqttBroker] Unknown packet type: $packetType');
+      }
+    } catch (e) {
+      print('[MqttBroker] Error while writing to client: $e');
+      _handleDisconnect(client);
     }
   }
 
