@@ -67,16 +67,17 @@ class MqttBroker {
     final remainingLength = remainingLengthResult['length'] ?? 0;
     final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
 
-    // if (data.length < variableHeaderIndex + remainingLength) {
-    //   print('[MqttBroker] Incomplete packet, ignoring.');
-    //   return;
-    // }
+    if (data.length < variableHeaderIndex + remainingLength) {
+      print(
+          '[MqttBroker] Incomplete packet: Expected length = ${variableHeaderIndex + remainingLength}, Actual length = ${data.length}');
+      return;
+    }
 
     // Process Packet by Type
     switch (packetType) {
       case '10': // CONNECT
         print('[MqttBroker] CONNECT received');
-        client.add(_buildConnAckPacket());
+        _handleConnect(client);
         break;
 
       case '82': // SUBSCRIBE
@@ -115,7 +116,8 @@ class MqttBroker {
       multiplier *= 128;
 
       if (multiplier > 128 * 128 * 128) {
-        return null; // Remaining length field too large
+        print('[MqttBroker] Remaining length too large, ignoring packet.');
+        return null;
       }
 
       index++;
@@ -126,6 +128,24 @@ class MqttBroker {
     }
 
     return {'length': value, 'index': index};
+  }
+
+  void _handleConnect(Socket client) {
+    final clientAddress = client.remoteAddress.address;
+
+    List<String> connectedClientAdresses = [];
+
+    _topicSubscribers.forEach((topic, clients) async {
+      connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
+    });
+
+    if (connectedClientAdresses.contains(clientAddress)) {
+      print('[MqttBroker] CONNECT ignored: Client $clientAddress is already connected.');
+      return;
+    }
+
+    print('[MqttBroker] CONNECT received from $clientAddress');
+    client.add(_buildConnAckPacket());
   }
 
   void _handlePublish(Socket client, Uint8List data, int variableHeaderIndex, int remainingLength) {
@@ -224,18 +244,6 @@ class MqttBroker {
     }
   }
 
-  // String? _extractString(Uint8List data, int startIndex) {
-  //   if (startIndex + 2 > data.length) {
-  //     return null;
-  //   }
-  //   final length = (data[startIndex] << 8) + data[startIndex + 1];
-  //   final endIndex = startIndex + 2 + length;
-  //   if (endIndex > data.length) {
-  //     return null;
-  //   }
-  //   return String.fromCharCodes(data.sublist(startIndex + 2, endIndex));
-  // }
-
   void _subscribeToTopic(Socket client, String topic) {
     if (!_topicSubscribers.containsKey(topic)) {
       _topicSubscribers[topic] = [];
@@ -316,8 +324,9 @@ class MqttBroker {
 
   void _clientDisconnected(Socket client) {
     print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
-    _topicSubscribers.forEach((topic, clients) {
-      client.close();
+    _topicSubscribers.forEach((topic, clients) async {
+      await client.flush();
+      await client.close();
       clients.remove(client);
     });
   }
