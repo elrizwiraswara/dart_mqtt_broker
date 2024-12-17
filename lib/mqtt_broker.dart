@@ -93,7 +93,7 @@ class MqttBroker {
 
       case 'c0': // PINGREQ (Handled by client)
         print('[MqttBroker] PINGREQ received');
-        client.add(Uint8List.fromList([0xD0, 0x00]));
+        _handlerPingReq(client);
         break;
 
       case 'e0': // DISCONNECT (Handled by client)
@@ -146,7 +146,13 @@ class MqttBroker {
     }
 
     print('[MqttBroker] CONNECT received from $clientAddress');
-    client.add(_buildConnAckPacket());
+
+    try {
+      client.add(_buildConnAckPacket());
+    } catch (e) {
+      print('[MqttBroker] Error while writing to client: $e');
+      _handleDisconnect(client);
+    }
   }
 
   void _handlePublish(Socket client, Uint8List data, int variableHeaderIndex, int remainingLength) {
@@ -193,7 +199,12 @@ class MqttBroker {
 
     // Acknowledge if QoS 1
     if (qos == 1 && packetIdentifier != null) {
-      client.add(_buildPubAckPacket(packetIdentifier));
+      try {
+        client.add(_buildPubAckPacket(packetIdentifier));
+      } catch (e) {
+        print('[MqttBroker] Error while writing to client: $e');
+        _handleDisconnect(client);
+      }
     }
 
     // For QoS 2, additional handling (PUBREC, PUBREL, PUBCOMP) would be needed.
@@ -253,8 +264,13 @@ class MqttBroker {
     print('[MqttBroker] Client subscribed to topic: $topic length ${_topicSubscribers.length}');
     print('[MqttBroker] Client subscriber: ${_topicSubscribers.toString()}');
 
-    // Send SUBACK packet (optional, depending on MQTT version)
-    client.add(_buildSubAckPacket());
+    try {
+      // Send SUBACK packet (optional, depending on MQTT version)
+      client.add(_buildSubAckPacket());
+    } catch (e) {
+      print('[MqttBroker] Error while writing to client: $e');
+      _handleDisconnect(client);
+    }
 
     // Notify the listener
     if (_onMessagePublished != null) {
@@ -272,8 +288,15 @@ class MqttBroker {
       final subscribers = _topicSubscribers[topic]!;
       for (final client in subscribers) {
         final publishPacket = _buildPublishPacket(topic, qos, payload);
-        client.add(publishPacket);
         print('[MqttBroker] Message sent to client: Topic = $topic, Payload = $payload');
+
+        try {
+          // Send SUBACK packet (optional, depending on MQTT version)
+          client.add(publishPacket);
+        } catch (e) {
+          print('[MqttBroker] Error while writing to client: $e');
+          _handleDisconnect(client);
+        }
       }
     } else {
       print('[MqttBroker] No subscribers for topic: $topic');
@@ -321,6 +344,15 @@ class MqttBroker {
       result.add(encodedByte);
     } while (length > 0);
     return result;
+  }
+
+  void _handlerPingReq(Socket client) {
+    try {
+      client.add(Uint8List.fromList([0xD0, 0x00]));
+    } catch (e) {
+      print('[MqttBroker] Error while writing to client: $e');
+      _handleDisconnect(client);
+    }
   }
 
   void _handleDisconnect(Socket client) {
