@@ -43,7 +43,6 @@ class MqttBroker {
   void _handleClient(Socket client) {
     print('[MqttBroker] Client connected: ${client.remoteAddress.address}:${client.remotePort}');
     client.listen(
-      cancelOnError: true,
       (Uint8List data) => _processPacket(client, data),
       onError: (error) => print('[MqttBroker] Error from client: $error'),
       onDone: () => print('[MqttBroker] Client disconnected'),
@@ -137,21 +136,7 @@ class MqttBroker {
   }
 
   void _handleConnect(Socket client) {
-    // final clientAddress = client.remoteAddress.address;
-
-    // List<String> connectedClientAdresses = [];
-
-    // _topicSubscribers.forEach((topic, clients) async {
-    //   connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
-    // });
-
-    // if (connectedClientAdresses.contains(clientAddress)) {
-    //   print('[MqttBroker] CONNECT ignored: Client $clientAddress is already connected.');
-    //   return;
-    // }
-
     print('[MqttBroker] CONNECT received from ${client.remoteAddress.address}');
-
     client.add(_buildConnAckPacket());
   }
 
@@ -260,6 +245,20 @@ class MqttBroker {
     if (!_topicSubscribers.containsKey(topic)) {
       _topicSubscribers[topic] = [];
     }
+
+    final clientAddress = client.remoteAddress.address;
+
+    List<String> connectedClientAdresses = [];
+
+    _topicSubscribers.forEach((topic, clients) async {
+      connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
+    });
+
+    if (connectedClientAdresses.contains(clientAddress)) {
+      print('[MqttBroker] Client subscribe ignored: Client $clientAddress is already subscribed.');
+      return;
+    }
+
     _topicSubscribers[topic]!.add(client);
     print('[MqttBroker] Client subscribed to topic: $topic length ${_topicSubscribers.length}');
     print('[MqttBroker] Client subscriber: ${_topicSubscribers.toString()}');
