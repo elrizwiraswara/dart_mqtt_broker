@@ -45,7 +45,6 @@ class MqttBroker {
     client.listen(
       (Uint8List data) => _processPacket(client, data),
       onError: (error) => print('[MqttBroker] Error from client: $error'),
-      onDone: () => _clientDisconnected(client),
     );
   }
 
@@ -97,7 +96,7 @@ class MqttBroker {
 
       case 'e0': // DISCONNECT (Handled by client)
         print('[MqttBroker] DISCONNECT received');
-        _clientDisconnected(client);
+        _handleDisconnect(client);
         break;
 
       default:
@@ -322,7 +321,7 @@ class MqttBroker {
     return result;
   }
 
-  void _clientDisconnected(Socket client) {
+  void _handleDisconnect(Socket client) {
     print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
     _topicSubscribers.forEach((topic, clients) async {
       await client.flush();
