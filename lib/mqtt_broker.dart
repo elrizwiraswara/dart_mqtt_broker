@@ -7,7 +7,8 @@ class MqttBroker {
 
   late ServerSocket? _serverSocket;
   final Map<String, List<Socket>> _topicSubscribers = {};
-  void Function(String topic, int qos, Uint8List payload)? _onMessagePublished;
+  void Function(String topic, int count)? _onTopicSubscribedListener;
+  void Function(String topic, int qos, Uint8List payload)? _onMessagePublishedListener;
 
   MqttBroker({
     required this.address,
@@ -35,9 +36,24 @@ class MqttBroker {
     }
   }
 
+  void onTopicSubscribedListener(Function(String topic, int count) listener) {
+    _onTopicSubscribedListener = listener;
+    print('[MqttBroker] Listener for subscribe topics set.');
+  }
+
   void onMessagePublishedListener(Function(String topic, int qos, Uint8List payload) listener) {
-    _onMessagePublished = listener;
+    _onMessagePublishedListener = listener;
     print('[MqttBroker] Listener for published messages set.');
+  }
+
+  void disconnectClient(String address) {
+    _topicSubscribers.forEach((topic, clients) {
+      for (var client in clients) {
+        if (client.remoteAddress.address == address) {
+          _handleDisconnect(client);
+        }
+      }
+    });
   }
 
   void _handleClient(Socket client) {
@@ -272,9 +288,8 @@ class MqttBroker {
     }
 
     // Notify the listener
-    if (_onMessagePublished != null) {
-      print('[MqttBroker] Message publised listener added');
-      _onMessagePublished!(topic, 0, Uint8List.fromList([0]));
+    if (_onTopicSubscribedListener != null) {
+      _onTopicSubscribedListener!(topic, _topicSubscribers[topic]!.length);
     }
   }
 
@@ -302,9 +317,8 @@ class MqttBroker {
     }
 
     // Notify the listener
-    if (_onMessagePublished != null) {
-      print('[MqttBroker] Message publised listener added');
-      _onMessagePublished!(topic, qos, payload);
+    if (_onMessagePublishedListener != null) {
+      _onMessagePublishedListener!(topic, qos, payload);
     }
   }
 
