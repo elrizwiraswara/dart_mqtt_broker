@@ -43,8 +43,10 @@ class MqttBroker {
   void _handleClient(Socket client) {
     print('[MqttBroker] Client connected: ${client.remoteAddress.address}:${client.remotePort}');
     client.listen(
+      cancelOnError: true,
       (Uint8List data) => _processPacket(client, data),
       onError: (error) => print('[MqttBroker] Error from client: $error'),
+      onDone: () => _handleDisconnect(client),
     );
   }
 
