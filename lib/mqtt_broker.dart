@@ -28,8 +28,13 @@ class MqttBroker {
 
   Future<void> stop() async {
     try {
-      _serverSocket?.close();
+      _serverSocket?.forEach((client) async {
+        await _handleDisconnect(client);
+      });
+
+      await _serverSocket?.close();
       _serverSocket = null;
+
       _topicSubscribers.clear();
       print('[MqttBroker] MQTT Broker stopped');
     } catch (e) {
