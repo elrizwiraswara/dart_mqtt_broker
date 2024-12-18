@@ -28,9 +28,11 @@ class MqttBroker {
 
   Future<void> stop() async {
     try {
-      _serverSocket?.forEach((client) async {
-        await _handleDisconnect(client);
-      });
+      for (var e in _topicSubscribers.entries) {
+        for (var client in e.value) {
+          await _handleDisconnect(client);
+        }
+      }
 
       await _serverSocket?.close();
       _serverSocket = null;
