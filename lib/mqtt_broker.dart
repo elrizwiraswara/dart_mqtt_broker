@@ -41,6 +41,7 @@ class MqttBroker {
       print('[MqttBroker] MQTT Broker stopped');
     } catch (e) {
       print('[MqttBroker] Failed to stop MQTT Broker: $e');
+      rethrow;
     }
   }
 
@@ -376,8 +377,7 @@ class MqttBroker {
   }
 
   Future<void> _handleDisconnect(Socket client) async {
-    await client.flush();
-    await client.close();
+    client.destroy();
     print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
   }
 
