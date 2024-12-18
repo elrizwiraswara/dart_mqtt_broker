@@ -17,11 +17,12 @@ class MqttBroker {
 
   Future<void> start() async {
     try {
-      _serverSocket = await ServerSocket.bind(address, port);
+      _serverSocket = await ServerSocket.bind(address, port, shared: true);
       print('[MqttBroker] MQTT Broker started on ${_serverSocket!.address} port $port');
       _serverSocket!.listen(_handleClient);
     } catch (e) {
       print('[MqttBroker] Failed to start MQTT Broker: $e');
+      rethrow;
     }
   }
 
@@ -33,6 +34,7 @@ class MqttBroker {
       print('[MqttBroker] MQTT Broker stopped');
     } catch (e) {
       print('[MqttBroker] Failed to stop MQTT Broker: $e');
+      rethrow;
     }
   }
 
@@ -46,11 +48,11 @@ class MqttBroker {
     print('[MqttBroker] Listener for published messages set.');
   }
 
-  void disconnectClient(String address) {
-    _topicSubscribers.forEach((topic, clients) {
+  Future<void> disconnectClient(String address) async {
+    _topicSubscribers.forEach((topic, clients) async {
       for (var client in clients) {
         if (client.remoteAddress.address == address) {
-          _handleDisconnect(client);
+          await _handleDisconnect(client);
         }
       }
     });
@@ -65,7 +67,7 @@ class MqttBroker {
     );
   }
 
-  void _processPacket(Socket client, Uint8List data) {
+  void _processPacket(Socket client, Uint8List data) async {
     try {
       if (data.isEmpty) {
         print('[MqttBroker] Received empty packet, ignoring.');
@@ -81,6 +83,7 @@ class MqttBroker {
         print('[MqttBroker] Invalid remaining length field, ignoring packet.');
         return;
       }
+
       final remainingLength = remainingLengthResult['length'] ?? 0;
       final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
 
@@ -122,7 +125,8 @@ class MqttBroker {
       }
     } catch (e) {
       print('[MqttBroker] Error while writing to client: $e');
-      _handleDisconnect(client);
+      await _handleDisconnect(client);
+      rethrow;
     }
   }
 
@@ -152,7 +156,23 @@ class MqttBroker {
   }
 
   void _handleConnect(Socket client) {
-    print('[MqttBroker] CONNECT received from ${client.remoteAddress.address}');
+    print('[MqttBroker] CONNECT received from ${client.address.address}:${client.port}');
+    print('[MqttBroker] CONNECT received from (Remote) ${client.remoteAddress.address}:${client.remotePort}');
+
+    final clientAddress = client.remoteAddress.address;
+
+    _topicSubscribers.forEach((topic, clients) async {
+      List<String> connectedClientAdresses = [];
+
+      connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
+
+      if (connectedClientAdresses.contains(clientAddress)) {
+        print('[MqttBroker] Client $clientAddress is already connect. Try re-connecting...');
+        final client = clients.where((e) => e.remoteAddress.address == clientAddress).firstOrNull;
+        if (client != null) await _handleDisconnect(client);
+      }
+    });
+
     client.add(_buildConnAckPacket());
   }
 
@@ -200,12 +220,7 @@ class MqttBroker {
 
     // Acknowledge if QoS 1
     if (qos == 1 && packetIdentifier != null) {
-      try {
-        client.add(_buildPubAckPacket(packetIdentifier));
-      } catch (e) {
-        print('[MqttBroker] Error while writing to client: $e');
-        _handleDisconnect(client);
-      }
+      client.add(_buildPubAckPacket(packetIdentifier));
     }
 
     // For QoS 2, additional handling (PUBREC, PUBREL, PUBCOMP) would be needed.
@@ -279,13 +294,8 @@ class MqttBroker {
     print('[MqttBroker] Client subscribed to topic: $topic length ${_topicSubscribers.length}');
     print('[MqttBroker] Client subscriber: ${_topicSubscribers.toString()}');
 
-    try {
-      // Send SUBACK packet (optional, depending on MQTT version)
-      client.add(_buildSubAckPacket());
-    } catch (e) {
-      print('[MqttBroker] Error while writing to client: $e');
-      _handleDisconnect(client);
-    }
+    // Send SUBACK packet (optional, depending on MQTT version)
+    client.add(_buildSubAckPacket());
 
     // Notify the listener
     if (_onTopicSubscribedListener != null) {
@@ -304,13 +314,8 @@ class MqttBroker {
         final publishPacket = _buildPublishPacket(topic, qos, payload);
         print('[MqttBroker] Message sent to client: Topic = $topic, Payload = $payload');
 
-        try {
-          // Send SUBACK packet (optional, depending on MQTT version)
-          client.add(publishPacket);
-        } catch (e) {
-          print('[MqttBroker] Error while writing to client: $e');
-          _handleDisconnect(client);
-        }
+        // Send SUBACK packet (optional, depending on MQTT version)
+        client.add(publishPacket);
       }
     } else {
       print('[MqttBroker] No subscribers for topic: $topic');
@@ -348,6 +353,7 @@ class MqttBroker {
 
   List<int> _encodeRemainingLength(int length) {
     final result = <int>[];
+
     do {
       var encodedByte = length % 128;
       length = length ~/ 128;
@@ -356,22 +362,18 @@ class MqttBroker {
       }
       result.add(encodedByte);
     } while (length > 0);
+
     return result;
   }
 
   void _handlerPingReq(Socket client) {
-    try {
-      client.add(Uint8List.fromList([0xD0, 0x00]));
-    } catch (e) {
-      print('[MqttBroker] Error while writing to client: $e');
-      _handleDisconnect(client);
-    }
+    client.add(Uint8List.fromList([0xD0, 0x00]));
   }
 
-  void _handleDisconnect(Socket client) async {
-    print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
+  Future<void> _handleDisconnect(Socket client) async {
     await client.flush();
     await client.close();
+    print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
   }
 
   Uint8List _buildConnAckPacket() {
