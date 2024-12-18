@@ -162,7 +162,6 @@ class MqttBroker {
   }
 
   void _handleConnect(Socket client) {
-    print('[MqttBroker] CONNECT received from ${client.address.address}:${client.port}');
     print('[MqttBroker] CONNECT received from (Remote) ${client.remoteAddress.address}:${client.remotePort}');
 
     final clientAddress = client.remoteAddress.address;
