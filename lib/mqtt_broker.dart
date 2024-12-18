@@ -41,7 +41,6 @@ class MqttBroker {
       print('[MqttBroker] MQTT Broker stopped');
     } catch (e) {
       print('[MqttBroker] Failed to stop MQTT Broker: $e');
-      rethrow;
     }
   }
 
