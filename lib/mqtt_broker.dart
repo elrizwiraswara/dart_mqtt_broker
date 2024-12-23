@@ -90,11 +90,11 @@ class MqttBroker {
       final remainingLength = remainingLengthResult['length'] ?? 0;
       final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
 
-      if (data.length < variableHeaderIndex + remainingLength) {
-        print(
-            '[MqttBroker] Incomplete packet: Expected length = ${variableHeaderIndex + remainingLength}, Actual length = ${data.length}');
-        return;
-      }
+      // if (data.length < variableHeaderIndex + remainingLength) {
+      //   print(
+      //       '[MqttBroker] Incomplete packet: Expected length = ${variableHeaderIndex + remainingLength}, Actual length = ${data.length}');
+      //   return;
+      // }
 
       // Process Packet by Type
       switch (packetType) {
