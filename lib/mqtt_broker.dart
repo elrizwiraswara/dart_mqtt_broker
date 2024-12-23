@@ -1,12 +1,15 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dart_mqtt_broker/client.dart';
+
 class MqttBroker {
   final String address;
   final int port;
 
   late ServerSocket? _serverSocket;
-  final Map<String, List<Socket>> _topicSubscribers = {};
+  final List<Client> _clients = [];
+  final Map<String, List<Client>> _topicSubscribers = {};
   void Function(String topic, int count)? _onTopicSubscribedListener;
   void Function(String topic, int qos, Uint8List payload)? _onMessagePublishedListener;
 
@@ -28,10 +31,8 @@ class MqttBroker {
 
   Future<void> stop() async {
     try {
-      for (var e in _topicSubscribers.entries) {
-        for (var client in e.value) {
-          await _handleDisconnect(client);
-        }
+      for (var client in _clients) {
+        await _handleDisconnect(client.socket);
       }
 
       await _serverSocket?.close();
@@ -55,18 +56,11 @@ class MqttBroker {
     print('[MqttBroker] Listener for published messages set.');
   }
 
-  Future<void> disconnectClient(String address) async {
-    _topicSubscribers.forEach((topic, clients) async {
-      for (var client in clients) {
-        if (client.remoteAddress.address == address) {
-          await _handleDisconnect(client);
-        }
-      }
-    });
+  Future<void> disconnectClient(Socket socket) async {
+    await _handleDisconnect(socket);
   }
 
   void _handleClient(Socket client) {
-    print('[MqttBroker] Client connected: ${client.remoteAddress.address}:${client.remotePort}');
     client.listen(
       (Uint8List data) => _processPacket(client, data),
       onError: (error) => print('[MqttBroker] Error from client: $error'),
@@ -74,7 +68,7 @@ class MqttBroker {
     );
   }
 
-  void _processPacket(Socket client, Uint8List data) async {
+  void _processPacket(Socket socket, Uint8List data) async {
     try {
       if (data.isEmpty) {
         print('[MqttBroker] Received empty packet, ignoring.');
@@ -104,27 +98,27 @@ class MqttBroker {
       switch (packetType) {
         case '10': // CONNECT
           print('[MqttBroker] CONNECT received');
-          _handleConnect(client);
+          _handleConnect(socket, data);
           break;
 
         case '82': // SUBSCRIBE
           print('[MqttBroker] SUBSCRIBE received');
-          _handleSubscribe(client, data, variableHeaderIndex, remainingLength);
+          _handleSubscribe(socket, data, variableHeaderIndex, remainingLength);
           break;
 
         case '30': // PUBLISH
           print('[MqttBroker] PUBLISH received');
-          _handlePublish(client, data, variableHeaderIndex, remainingLength);
+          _handlePublish(socket, data, variableHeaderIndex, remainingLength);
           break;
 
         case 'c0': // PINGREQ (Handled by client)
           print('[MqttBroker] PINGREQ received');
-          _handlerPingReq(client);
+          _handlerPingReq(socket);
           break;
 
         case 'e0': // DISCONNECT (Handled by client)
           print('[MqttBroker] DISCONNECT received');
-          _handleDisconnect(client);
+          _handleDisconnect(socket);
           break;
 
         default:
@@ -132,7 +126,7 @@ class MqttBroker {
       }
     } catch (e) {
       print('[MqttBroker] Error while writing to client: $e');
-      await _handleDisconnect(client);
+      await _handleDisconnect(socket);
       rethrow;
     }
   }
@@ -162,24 +156,45 @@ class MqttBroker {
     return {'length': value, 'index': index};
   }
 
-  void _handleConnect(Socket client) {
-    print('[MqttBroker] CONNECT received from (Remote) ${client.remoteAddress.address}:${client.remotePort}');
+  void _handleConnect(Socket socket, Uint8List data) {
+    final isSessionPresent = _isSessionPresent(data);
+    final clientId = _parseClientId(data);
 
-    final clientAddress = client.remoteAddress.address;
+    _clients.add(Client(clientId: clientId, socket: socket));
 
-    _topicSubscribers.forEach((topic, clients) async {
-      List<String> connectedClientAdresses = [];
+    socket.add(_buildConnAckPacket(isSessionPresent));
 
-      connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
+    print('[MqttBroker] CONNECT received from $clientId address: ${socket.remoteAddress.address}:${socket.remotePort}');
+  }
 
-      if (connectedClientAdresses.contains(clientAddress)) {
-        print('[MqttBroker] Client $clientAddress is already connect. Try re-connecting...');
-        final client = clients.where((e) => e.remoteAddress.address == clientAddress).firstOrNull;
-        if (client != null) await _handleDisconnect(client);
-      }
-    });
+  bool _isSessionPresent(Uint8List data) {
+    // The clean session flag is the first bit of the Connect Flags byte (byte 9)
+    return (data[9] & 0x02) != 0;
+  }
 
-    client.add(_buildConnAckPacket());
+  String _parseClientId(Uint8List data) {
+    // Skip the fixed header (2 bytes)
+    int index = 2;
+
+    // Skip the variable header (10 bytes for protocol name, version, flags, keep alive)
+    index += 10;
+
+    // Ensure there are enough bytes to read the client ID length
+    if (index + 2 > data.length) {
+      throw RangeError('Not enough data to read client ID length');
+    }
+
+    // Read the length of the client ID (2 bytes)
+    int clientIdLength = (data[index] << 8) + data[index + 1];
+    index += 2;
+
+    // Ensure there are enough bytes to read the client ID
+    if (index + clientIdLength > data.length) {
+      throw RangeError('Not enough data to read client ID');
+    }
+
+    // Extract the client ID
+    return String.fromCharCodes(data.sublist(index, index + clientIdLength));
   }
 
   void _handlePublish(Socket client, Uint8List data, int variableHeaderIndex, int remainingLength) {
@@ -197,6 +212,7 @@ class MqttBroker {
       print('[MqttBroker] Invalid topic length in PUBLISH packet.');
       return;
     }
+
     final topic = String.fromCharCodes(data.sublist(topicStart, topicEnd));
 
     // QoS-specific Handling: Extract Packet Identifier for QoS 1 or 2
@@ -241,15 +257,18 @@ class MqttBroker {
     ]);
   }
 
-  void _handleSubscribe(Socket client, Uint8List data, int variableHeaderIndex, int remainingLength) {
+  void _handleSubscribe(Socket socket, Uint8List data, int variableHeaderIndex, int remainingLength) {
     int index = variableHeaderIndex;
-    final packetIdentifier = (data[index] << 8) + data[index + 1]; // 2 bytes for Packet Identifier
+
+    // Extract Packet Identifier
+    final packetIdentifier = (data[index] << 8) + data[index + 1];
     index += 2;
-    print('[MqttBroker] Packet Identifier: $packetIdentifier');
 
     // Check if the remaining length makes sense for the topics in the packet
     int expectedLength = remainingLength - 2; // excluding Packet Identifier
     print('[MqttBroker] Expected remaining length for topics: $expectedLength');
+
+    final grantedQoS = <int>[];
 
     while (index < data.length && expectedLength > 0) {
       // Extract Topic Length (2 bytes)
@@ -272,36 +291,47 @@ class MqttBroker {
       print('[MqttBroker] Subscribed to topic: "$topic" with QoS: $qos');
 
       // Subscribe client to the topic
-      _subscribeToTopic(client, topic);
+      _subscribeToTopic(socket, topic);
+
+      // Add granted QoS to the list (for simplicity, grant the requested QoS)
+      grantedQoS.add(qos);
 
       expectedLength -= (2 + topicLength + 1); // reduce expected length (Topic Length + Topic Name + QoS)
     }
+
+    // Build and send SUBACK packet
+    final subAckPacket = _buildSubAckPacket(packetIdentifier, grantedQoS);
+    socket.add(subAckPacket);
   }
 
-  void _subscribeToTopic(Socket client, String topic) {
+  void _subscribeToTopic(Socket socket, String topic) {
     if (!_topicSubscribers.containsKey(topic)) {
       _topicSubscribers[topic] = [];
     }
 
-    final clientAddress = client.remoteAddress.address;
+    List<Client> subscribedClients = [];
 
-    List<String> connectedClientAdresses = [];
-
-    _topicSubscribers.forEach((topic, clients) async {
-      connectedClientAdresses = clients.map((e) => e.remoteAddress.address).toList();
+    _topicSubscribers.forEach((currTopic, clients) async {
+      if (currTopic != topic) return;
+      subscribedClients = clients;
     });
 
-    if (connectedClientAdresses.contains(clientAddress)) {
-      print('[MqttBroker] Client subscribe ignored: Client $clientAddress is already subscribed.');
+    final currClient = _clients.where((x) => x.socket == socket).firstOrNull;
+    if (currClient == null) {
+      print('[MqttBroker] Client not found or not connected yet for subscription');
       return;
     }
 
-    _topicSubscribers[topic]!.add(client);
-    print('[MqttBroker] Client subscribed to topic: $topic length ${_topicSubscribers.length}');
-    print('[MqttBroker] Client subscriber: ${_topicSubscribers.toString()}');
+    final isAlreadySubscribed = subscribedClients.any((x) => x.clientId == currClient.clientId);
 
-    // Send SUBACK packet (optional, depending on MQTT version)
-    client.add(_buildSubAckPacket());
+    if (isAlreadySubscribed) {
+      print('[MqttBroker] Client subscribe ignored: Client ${currClient.clientId} is already subscribed.');
+      return;
+    }
+
+    _topicSubscribers[topic]!.add(currClient);
+    print('[MqttBroker] Client subscribed to topic: $topic length ${_topicSubscribers[topic]!.length}');
+    print('[MqttBroker] Client subscriber: ${_topicSubscribers.toString()}');
 
     // Notify the listener
     if (_onTopicSubscribedListener != null) {
@@ -309,8 +339,25 @@ class MqttBroker {
     }
   }
 
-  Uint8List _buildSubAckPacket() {
-    return Uint8List.fromList([0x90, 0x02, 0x00, 0x00]); // Example SUBACK packet
+  Uint8List _buildSubAckPacket(int packetIdentifier, List<int> grantedQoS) {
+    // Fixed header for SUBACK packet
+    final fixedHeader = 0x90;
+
+    // Remaining length: 2 bytes for Packet Identifier + 1 byte for each granted QoS
+    final remainingLength = 2 + grantedQoS.length;
+
+    // Packet Identifier (2 bytes)
+    final packetIdentifierBytes = Uint8List(2);
+    packetIdentifierBytes[0] = (packetIdentifier >> 8) & 0xFF;
+    packetIdentifierBytes[1] = packetIdentifier & 0xFF;
+
+    // Combine all parts
+    return Uint8List.fromList([
+      fixedHeader,
+      remainingLength,
+      ...packetIdentifierBytes,
+      ...grantedQoS,
+    ]);
   }
 
   void publishMessage(String topic, int qos, Uint8List payload) {
@@ -318,10 +365,12 @@ class MqttBroker {
       final subscribers = _topicSubscribers[topic]!;
       for (final client in subscribers) {
         final publishPacket = _buildPublishPacket(topic, qos, payload);
-        print('[MqttBroker] Message sent to client: Topic = $topic, Payload = $payload');
 
         // Send SUBACK packet (optional, depending on MQTT version)
-        client.add(publishPacket);
+        final currClient = _clients.where((e) => e.clientId == client.clientId).firstOrNull;
+        if (currClient == null) return;
+        currClient.socket.add(publishPacket);
+        print('[MqttBroker] Message sent to client: ID: ${currClient.clientId}, Topic: $topic, Payload: $payload');
       }
     } else {
       print('[MqttBroker] No subscribers for topic: $topic');
@@ -333,7 +382,7 @@ class MqttBroker {
     }
   }
 
-  Uint8List _buildPublishPacket(String topic, int qos, Uint8List payload) {
+  Uint8List _buildPublishPacket(String topic, int qos, Uint8List payload, {int packetIdentifier = 0}) {
     // Fixed Header
     final fixedHeader = 0x30 | (qos << 1); // PUBLISH packet with QoS bits
 
@@ -343,8 +392,16 @@ class MqttBroker {
     topicLength[0] = (topicBytes.length >> 8) & 0xFF;
     topicLength[1] = topicBytes.length & 0xFF;
 
-    // Remaining Length: Topic Length + Payload Length
-    final remainingLength = topicBytes.length + 2 + payload.length;
+    // Variable Header: Packet Identifier (if QoS > 0)
+    Uint8List packetIdentifierBytes = Uint8List(0);
+    if (qos > 0) {
+      packetIdentifierBytes = Uint8List(2);
+      packetIdentifierBytes[0] = (packetIdentifier >> 8) & 0xFF;
+      packetIdentifierBytes[1] = packetIdentifier & 0xFF;
+    }
+
+    // Remaining Length: Topic Length + Packet Identifier (if QoS > 0) + Payload Length
+    final remainingLength = topicBytes.length + 2 + packetIdentifierBytes.length + payload.length;
     final remainingLengthBytes = _encodeRemainingLength(remainingLength);
 
     // Combine all parts
@@ -353,36 +410,48 @@ class MqttBroker {
       ...remainingLengthBytes,
       ...topicLength,
       ...topicBytes,
+      ...packetIdentifierBytes,
       ...payload,
     ]);
   }
 
-  List<int> _encodeRemainingLength(int length) {
-    final result = <int>[];
-
+// Helper function to encode the remaining length
+  Uint8List _encodeRemainingLength(int length) {
+    final encodedBytes = <int>[];
     do {
-      var encodedByte = length % 128;
+      var byte = length % 128;
       length = length ~/ 128;
+      // if there are more digits to encode, set the top bit of this digit
       if (length > 0) {
-        encodedByte |= 0x80;
+        byte = byte | 0x80;
       }
-      result.add(encodedByte);
+      encodedBytes.add(byte);
     } while (length > 0);
-
-    return result;
+    return Uint8List.fromList(encodedBytes);
   }
 
   void _handlerPingReq(Socket client) {
     client.add(Uint8List.fromList([0xD0, 0x00]));
   }
 
-  Future<void> _handleDisconnect(Socket client) async {
-    client.destroy();
-    print('[MqttBroker] Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
+  Future<void> _handleDisconnect(Socket socket) async {
+    final client = _clients.where((e) => e.socket == socket).firstOrNull;
+    if (client == null) {
+      print('[MqttBroker] Client not found or already disconnected');
+      return;
+    }
+
+    _topicSubscribers.forEach((topic, clientIds) {
+      clientIds.removeWhere((e) => e == client.clientId);
+    });
+    await client.socket.close();
+    _clients.removeWhere((e) => e.clientId == client.clientId);
+    print('[MqttBroker] Client disconnected: ${client.clientId}');
   }
 
-  Uint8List _buildConnAckPacket() {
+  Uint8List _buildConnAckPacket(bool isSessionPresent) {
     // MQTT CONNACK Packet: Fixed header (0x20) + Remaining length (0x02) + Flags (0x00) + Return Code (0x00)
-    return Uint8List.fromList([0x20, 0x02, 0x00, 0x00]);
+    int flags = isSessionPresent ? 0x01 : 0x00;
+    return Uint8List.fromList([0x20, 0x02, flags, 0x00]);
   }
 }
