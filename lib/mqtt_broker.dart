@@ -32,12 +32,14 @@ class MqttBroker {
   Future<void> stop() async {
     try {
       for (var client in _clients) {
-        await _handleDisconnect(client.socket);
+        await client.socket.close();
+        client.socket.destroy();
       }
 
       await _serverSocket?.close();
       _serverSocket = null;
 
+      _clients.clear();
       _topicSubscribers.clear();
       print('[MqttBroker] MQTT Broker stopped');
     } catch (e) {
@@ -441,9 +443,10 @@ class MqttBroker {
       return;
     }
 
-    _topicSubscribers.forEach((topic, clientIds) {
-      clientIds.removeWhere((e) => e == client.clientId);
+    _topicSubscribers.forEach((topic, clients) {
+      clients.removeWhere((e) => e.clientId == client.clientId);
     });
+
     await client.socket.close();
     _clients.removeWhere((e) => e.clientId == client.clientId);
     print('[MqttBroker] Client disconnected: ${client.clientId}');
