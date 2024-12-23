@@ -102,7 +102,7 @@ class MqttBroker {
 
       // Process the complete packet
       final data = Uint8List.fromList(buffer.sublist(0, packetLength));
-      buffer.removeRange(0, packetLength);
+      data.removeRange(0, packetLength);
 
       // Process Packet by Type
       switch (packetType) {
