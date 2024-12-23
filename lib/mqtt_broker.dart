@@ -124,6 +124,11 @@ class MqttBroker {
           _handlePublish(socket, data, variableHeaderIndex, remainingLength);
           break;
 
+        case '62': // PUBREL
+          print('[MqttBroker] PUBREL received');
+          _handlePubRel(socket, data);
+          break;
+
         case 'c0': // PINGREQ (Handled by client)
           print('[MqttBroker] PINGREQ received');
           _handlerPingReq(socket);
@@ -260,6 +265,32 @@ class MqttBroker {
     }
 
     // For QoS 2, additional handling (PUBREC, PUBREL, PUBCOMP) would be needed.
+    if (qos == 2 && packetIdentifier != null) {
+      client.add(_buildPubRecPacket(packetIdentifier));
+    }
+  }
+
+  Uint8List _buildPubRecPacket(int packetIdentifier) {
+    return Uint8List.fromList([
+      0x50, // PUBREC packet type and flags
+      0x02, // Remaining length
+      (packetIdentifier >> 8) & 0xFF, // Packet Identifier MSB
+      packetIdentifier & 0xFF, // Packet Identifier LSB
+    ]);
+  }
+
+  void _handlePubRel(Socket client, Uint8List data) {
+    final packetIdentifier = (data[2] << 8) + data[3];
+    client.add(_buildPubCompPacket(packetIdentifier));
+  }
+
+  Uint8List _buildPubCompPacket(int packetIdentifier) {
+    return Uint8List.fromList([
+      0x70, // PUBCOMP packet type and flags
+      0x02, // Remaining length
+      (packetIdentifier >> 8) & 0xFF, // Packet Identifier MSB
+      packetIdentifier & 0xFF, // Packet Identifier LSB
+    ]);
   }
 
   Uint8List _buildPubAckPacket(int packetIdentifier) {
