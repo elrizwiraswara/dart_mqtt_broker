@@ -108,7 +108,11 @@ class MqttBroker {
           _handleSubscribe(socket, data, variableHeaderIndex, remainingLength);
           break;
 
-        case '30': // PUBLISH
+        case '30': // PUBLISH (QoS 0)
+        case '32': // PUBLISH (QoS 1)
+        case '34': // PUBLISH (QoS 1, DUP flag set)
+        case '36': // PUBLISH (QoS 2)
+        case '38': // PUBLISH (QoS 2, DUP flag set)
           print('[MqttBroker] PUBLISH received');
           _handlePublish(socket, data, variableHeaderIndex, remainingLength);
           break;
