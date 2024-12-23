@@ -63,25 +63,29 @@ class MqttBroker {
   }
 
   void _handleClient(Socket client) {
+    final buffer = <int>[];
     client.listen(
-      (Uint8List data) => _processPacket(client, data),
+      (Uint8List data) {
+        buffer.addAll(data);
+        _processPacket(client, data);
+      },
       onError: (error) => print('[MqttBroker] Error from client: $error'),
       onDone: () => print('[MqttBroker] Client disconnected'),
     );
   }
 
-  void _processPacket(Socket socket, Uint8List data) async {
+  void _processPacket(Socket socket, List<int> buffer) async {
     try {
-      if (data.isEmpty) {
+      if (buffer.isEmpty) {
         print('[MqttBroker] Received empty packet, ignoring.');
         return;
       }
 
       // Fixed Header
-      final packetType = data[0].toRadixString(16);
+      final packetType = buffer[0].toRadixString(16);
 
       // Parse Remaining Length
-      final remainingLengthResult = _parseRemainingLength(data, 1);
+      final remainingLengthResult = _parseRemainingLength(Uint8List.fromList(buffer), 1);
       if (remainingLengthResult == null) {
         print('[MqttBroker] Invalid remaining length field, ignoring packet.');
         return;
@@ -89,12 +93,16 @@ class MqttBroker {
 
       final remainingLength = remainingLengthResult['length'] ?? 0;
       final variableHeaderIndex = remainingLengthResult['index'] ?? 0;
+      final packetLength = variableHeaderIndex + remainingLength;
 
-      if (data.length < variableHeaderIndex + remainingLength) {
-        print(
-            '[MqttBroker] Incomplete packet: Expected length = ${variableHeaderIndex + remainingLength}, Actual length = ${data.length}');
+      if (buffer.length < packetLength) {
+        print('[MqttBroker] Incomplete packet length. Expected: $packetLength, Actual: ${buffer.length}');
         return;
       }
+
+      // Process the complete packet
+      final data = Uint8List.fromList(buffer.sublist(0, packetLength));
+      buffer.removeRange(0, packetLength);
 
       // Process Packet by Type
       switch (packetType) {
@@ -389,15 +397,7 @@ class MqttBroker {
     }
   }
 
-  Uint8List _buildPublishPacket(String topic, int qos, Uint8List payload,
-      {int packetIdentifier = 0,
-      Map<String, String>? userProperties,
-      int? messageExpiryInterval,
-      int? topicAlias,
-      int? subscriptionIdentifier,
-      bool? payloadFormatIndicator,
-      String? responseTopic,
-      Uint8List? correlationData}) {
+  Uint8List _buildPublishPacket(String topic, int qos, Uint8List payload, {int packetIdentifier = 0}) {
     // Fixed Header
     final fixedHeader = 0x30 | (qos << 1); // PUBLISH packet with QoS bits
 
@@ -415,42 +415,8 @@ class MqttBroker {
       packetIdentifierBytes[1] = packetIdentifier & 0xFF;
     }
 
-    // MQTT 5.0 Properties
-    final properties = <int>[];
-    if (userProperties != null) {
-      userProperties.forEach((key, value) {
-        properties.add(0x26); // User Property identifier
-        properties.addAll(Uint8List.fromList(key.codeUnits));
-        properties.addAll(Uint8List.fromList(value.codeUnits));
-      });
-    }
-    if (messageExpiryInterval != null) {
-      properties.add(0x02); // Message Expiry Interval identifier
-      properties.addAll(Uint8List(4)..buffer.asByteData().setUint32(0, messageExpiryInterval));
-    }
-    if (topicAlias != null) {
-      properties.add(0x23); // Topic Alias identifier
-      properties.addAll(Uint8List(2)..buffer.asByteData().setUint16(0, topicAlias));
-    }
-    if (subscriptionIdentifier != null) {
-      properties.add(0x0B); // Subscription Identifier identifier
-      properties.addAll(_encodeRemainingLength(subscriptionIdentifier));
-    }
-    if (payloadFormatIndicator != null) {
-      properties.add(0x01); // Payload Format Indicator identifier
-      properties.add(payloadFormatIndicator ? 1 : 0);
-    }
-    if (responseTopic != null) {
-      properties.add(0x08); // Response Topic identifier
-      properties.addAll(Uint8List.fromList(responseTopic.codeUnits));
-    }
-    if (correlationData != null) {
-      properties.add(0x09); // Correlation Data identifier
-      properties.addAll(correlationData);
-    }
-
-    // Remaining Length: Topic Length + Packet Identifier (if QoS > 0) + Properties Length + Payload Length
-    final remainingLength = topicBytes.length + 2 + packetIdentifierBytes.length + properties.length + payload.length;
+    // Remaining Length: Topic Length + Packet Identifier (if QoS > 0) + Payload Length
+    final remainingLength = topicBytes.length + 2 + packetIdentifierBytes.length + payload.length;
     final remainingLengthBytes = _encodeRemainingLength(remainingLength);
 
     // Combine all parts
@@ -460,7 +426,6 @@ class MqttBroker {
       ...topicLength,
       ...topicBytes,
       ...packetIdentifierBytes,
-      ...properties,
       ...payload,
     ]);
   }
