@@ -69,13 +69,14 @@ void main() async {
   // Listen to message published
   broker.onMessagePublishedListener((String topic, int qos, Uint8List payload) {
     final decodedPayload = utf8.decode(payload);
+    // final decodedPayload = deserialize(payload); // MessagePack
     print('Message published: topic: $topic, qos: $qos, payload: $decodedPayload');
   });
   
   String text = "Hello, World!";
+  Uint8List bytesData = Uint8List.fromList(utf8.encode(text));
   // You can also use MessagePack if needed
   // Uint8List bytesData = serialize(text);
-  Uint8List bytesData = Uint8List.fromList(utf8.encode(text));
 
   // Publish a message
   broker.publishMessage(
