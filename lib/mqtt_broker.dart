@@ -10,6 +10,8 @@ class MqttBroker {
   late ServerSocket? _serverSocket;
   final List<Client> _clients = [];
   final Map<String, List<Client>> _topicSubscribers = {};
+  void Function(Client client)? _onClientConnectListener;
+  void Function(Client client)? _onClientDisconnectListener;
   void Function(String topic, int count)? _onTopicSubscribedListener;
   void Function(String topic, int qos, Uint8List payload)? _onMessagePublishedListener;
 
@@ -48,6 +50,16 @@ class MqttBroker {
     }
   }
 
+  void onClientConnectListener(Function(Client client) listener) {
+    _onClientConnectListener = listener;
+    print('[MqttBroker] Listener for connected client set.');
+  }
+
+  void onClientDisconnectListener(Function(Client client) listener) {
+    _onClientDisconnectListener = listener;
+    print('[MqttBroker] Listener for disconnected client set.');
+  }
+
   void onTopicSubscribedListener(Function(String topic, int count) listener) {
     _onTopicSubscribedListener = listener;
     print('[MqttBroker] Listener for subscribe topics set.');
@@ -58,8 +70,8 @@ class MqttBroker {
     print('[MqttBroker] Listener for published messages set.');
   }
 
-  Future<void> disconnectClient(Socket socket) async {
-    await _handleDisconnect(socket);
+  Future<void> disconnectClient(Client client) async {
+    await _handleDisconnect(client.socket);
   }
 
   void _handleClient(Socket client) {
@@ -179,11 +191,16 @@ class MqttBroker {
     final isSessionPresent = _isSessionPresent(data);
     final clientId = _parseClientId(data);
 
-    _clients.add(Client(clientId: clientId, socket: socket));
+    final client = Client(clientId: clientId, socket: socket);
+    _clients.add(client);
 
     socket.add(_buildConnAckPacket(isSessionPresent));
-
     print('[MqttBroker] CONNECT received from $clientId address: ${socket.remoteAddress.address}:${socket.remotePort}');
+
+    // Notify the listener
+    if (_onClientConnectListener != null) {
+      _onClientConnectListener!(client);
+    }
   }
 
   bool _isSessionPresent(Uint8List data) {
@@ -493,6 +510,11 @@ class MqttBroker {
     await client.socket.close();
     _clients.removeWhere((e) => e.clientId == client.clientId);
     print('[MqttBroker] Client disconnected: ${client.clientId}');
+
+    // Notify the listener
+    if (_onClientDisconnectListener != null) {
+      _onClientDisconnectListener!(client);
+    }
   }
 
   Uint8List _buildConnAckPacket(bool isSessionPresent) {
