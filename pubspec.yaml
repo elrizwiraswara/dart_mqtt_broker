@@ -1,7 +1,7 @@
 name: dart_mqtt_broker
 description: A MQTT Broker written in dart
-version: 1.0.1
-# repository: https://github.com/my_org/my_repo
+version: 1.0.2
+repository: https://github.com/elrizwiraswara/dart_mqtt_broker
 
 environment:
   sdk: ^3.5.3
