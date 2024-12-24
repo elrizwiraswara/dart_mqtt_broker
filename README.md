@@ -34,15 +34,32 @@ Here is a basic example of how to use the MQTT broker:
 
 ```dart
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
-import 'package:dart_mqtt_broker/mqtt_broker.dart';
 
+import 'package:dart_mqtt_broker/mqtt_broker.dart';
+import 'package:dart_mqtt_broker/client.dart';
+// import 'package:msgpack_dart/msgpack_dart.dart';
 
 void main() async {
   // Start the MQTT Broker
-  final broker = MqttBroker(address: '0.0.0.0', port: 1883);
+  final broker = MqttBroker(address: InternetAddress.anyIPv4.address, port: 1883);
   await broker.start();
   print('MQTT Broker is running...');
+
+  List<Client> connectedClients = [];
+
+  // Listen to connected client
+  broker.onClientConnectListener((Client client) {
+    connectedClients.add(client);
+    print('Connected client: ${client.clientId}');
+  });
+  
+  // Listen to disconnected client
+  broker.onClientDisconnectListener((Client client) {
+    connectedClients.remove(client);
+    print('Disconnected client: ${client.clientId}');
+  });
   
   // Listen to topic subscribed
   broker.onTopicSubscribedListener((String topic, int count) {
@@ -55,15 +72,22 @@ void main() async {
     print('Message published: topic: $topic, qos: $qos, payload: $decodedPayload');
   });
   
-  // Publish a message
   String text = "Hello, World!";
+  // You can also use MessagePack if needed
+  // Uint8List bytesData = serialize(text);
   Uint8List uint8List = Uint8List.fromList(utf8.encode(text));
 
+  // Publish a message
   broker.publishMessage(
     '/topic/mytopic', // Topic
     0, // QoS
     uint8List, // Bytes data
   );
+
+  // Disconnect client
+  for (var client in connectedClients) {
+    await broker.disconnectClient(client);
+  }
   
   // Stop the broker
   await broker.stop();
