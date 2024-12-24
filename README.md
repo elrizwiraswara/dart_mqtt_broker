@@ -75,13 +75,13 @@ void main() async {
   String text = "Hello, World!";
   // You can also use MessagePack if needed
   // Uint8List bytesData = serialize(text);
-  Uint8List uint8List = Uint8List.fromList(utf8.encode(text));
+  Uint8List bytesData = Uint8List.fromList(utf8.encode(text));
 
   // Publish a message
   broker.publishMessage(
     '/topic/mytopic', // Topic
     0, // QoS
-    uint8List, // Bytes data
+    bytesData, // Payload
   );
 
   // Disconnect client
